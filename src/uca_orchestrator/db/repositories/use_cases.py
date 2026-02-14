@@ -1,3 +1,13 @@
+"""
+uca_orchestrator.db.repositories.use_cases
+
+Repository for `UseCase` entities.
+
+Responsibilities:
+- Encapsulate CRUD/query logic for use cases.
+- Provide safe update patterns for orchestration snapshots.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -21,6 +31,7 @@ class UseCaseRepo:
         submission_payload: dict[str, Any],
         external_use_case_id: str | None = None,
     ) -> UseCase:
+        # Default snapshot fields are initialized to stable values for downstream orchestration.
         uc = UseCase(
             owner=owner,
             submission_payload=submission_payload,
@@ -44,6 +55,7 @@ class UseCaseRepo:
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def set_status(self, use_case_id: uuid.UUID, status: UseCaseStatus) -> None:
+        # with_for_update prevents lost updates when multiple orchestrations race.
         uc = await self._session.get(UseCase, use_case_id, with_for_update=True)
         if uc is None:
             return
@@ -60,6 +72,7 @@ class UseCaseRepo:
         missing_artifacts: list[str] | None = None,
         risk_level: str | None = None,
     ) -> None:
+        # Snapshot writes are granular to reduce accidental overwrites.
         uc = await self._session.get(UseCase, use_case_id, with_for_update=True)
         if uc is None:
             return
@@ -74,3 +87,7 @@ class UseCaseRepo:
         if risk_level is not None:
             uc.risk_level = risk_level
         uc.updated_at = datetime.utcnow()
+
+
+# --- Module Notes -----------------------------------------------------------
+# This repo is called by internal dummy governance APIs and the orchestration service.

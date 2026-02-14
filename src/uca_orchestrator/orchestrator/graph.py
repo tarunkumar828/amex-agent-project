@@ -1,3 +1,14 @@
+"""
+uca_orchestrator.orchestrator.graph
+
+LangGraph graph construction/compilation.
+
+Responsibilities:
+- Wire node functions into a state machine.
+- Define conditional routing/loops.
+- Return a compiled runnable used by the service layer.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -35,6 +46,7 @@ def build_graph(*, client: InternalApiClient, max_attempts: int):
 
     graph = StateGraph(UseCaseState)
 
+    # Node registration: names are referenced by conditional edge routing.
     graph.add_node("entry", entry_node)
     graph.add_node("classify", classify_node)
     graph.add_node("parallel_fetch", _bind_client(parallel_fetch_node, client))
@@ -103,8 +115,13 @@ def _bind_max_attempts(
 
 
 async def _finish_node(state: UseCaseState) -> UseCaseState:
+    # Finish node marks success in state; service layer persists final snapshots.
     audit = list(state.get("audit_log", []))
     audit.append({"event": "FINISH", "details": {"status": "APPROVAL_READY"}})
     state["audit_log"] = audit
     state["escalation_required"] = False
     return state
+
+
+# --- Module Notes -----------------------------------------------------------
+# This graph is pure orchestration logic. Persistence is implemented in `services.orchestration_service`.

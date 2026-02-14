@@ -1,3 +1,13 @@
+"""
+uca_orchestrator.api.routers.internal.systems.policy
+
+Dummy policy engine.
+
+Responsibilities:
+- Return required artifacts and evaluations based on classification inputs.
+- Emulate a policy service whose rules may change over time (policy drift).
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -24,6 +34,7 @@ class PolicyResponse(BaseModel):
 
 @router.post("/requirements", response_model=PolicyResponse)
 async def get_policy_requirements(body: PolicyRequest) -> PolicyResponse:
+    # In production this logic would likely be data-driven (policy tables/rules engine).
     required_artifacts: list[str] = []
     required_evaluations: list[str] = []
 
@@ -50,3 +61,7 @@ async def get_policy_requirements(body: PolicyRequest) -> PolicyResponse:
         required_evaluations=required_evaluations,
         meta={"policy_version": "dummy-2026-02-12"},
     )
+
+
+# --- Module Notes -----------------------------------------------------------
+# Policy requirements are consumed by the orchestrator during parallel fetch/gap analysis.

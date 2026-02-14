@@ -1,3 +1,13 @@
+"""
+uca_orchestrator.api.routers.internal.systems.evaluations
+
+Dummy evaluation system.
+
+Responsibilities:
+- Trigger evaluation runs and persist derived metrics.
+- Provide the current eval metrics snapshot for a use case.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -34,7 +44,7 @@ async def trigger_evaluations(
     if uc is None:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Use case not found")
 
-    # Dummy metrics: predictable + slightly “strict” for PCI
+    # Dummy metrics: predictable and slightly strict for PCI to force remediation/escalation paths.
     cls = (uc.classification or {}).get("data_classification", "UNKNOWN")
     base_toxicity = 0.03 if cls == "NON_PCI" else 0.08 if cls == "PCI" else 0.05
     metrics = dict(uc.eval_metrics or {})
@@ -64,3 +74,7 @@ async def get_eval_status(
     if uc is None:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Use case not found")
     return EvalStatusResponse(eval_metrics=uc.eval_metrics or {})
+
+
+# --- Module Notes -----------------------------------------------------------
+# The orchestrator triggers evals via InternalApiClient in `eval_check_node`.

@@ -1,3 +1,15 @@
+"""
+uca_orchestrator.services.orchestration_service
+
+Orchestration lifecycle service (transaction + persistence owner).
+
+Responsibilities:
+- Create runs and initialize orchestration state.
+- Execute LangGraph with durable per-node checkpointing.
+- Persist artifacts and audit events.
+- Handle HITL interrupts and resume decisions.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -54,6 +66,7 @@ class OrchestrationService:
         }
 
         run = await self._runs.create(use_case_id=use_case_id, initial_state=dict(initial_state))
+        # Audit: run creation is attributed to the initiating actor.
         await self._audit.add(
             use_case_id=use_case_id,
             run_id=run.id,
@@ -73,6 +86,7 @@ class OrchestrationService:
         if uc is None:
             raise ValueError("use case not found")
 
+        # Tools client boundary: the graph calls governance systems via this interface.
         client = InternalApiClient(settings=self._settings, http=self._http)
         graph = build_graph(client=client, max_attempts=self._settings.max_remediation_attempts)
 
@@ -81,6 +95,7 @@ class OrchestrationService:
         state["run_id"] = str(run.id)
 
         try:
+            # Execute the graph using streaming updates so we can checkpoint after each node.
             final_state = await self._execute_with_checkpoints(
                 graph=graph,
                 use_case_id=uc.id,
@@ -116,6 +131,7 @@ class OrchestrationService:
                 "reason": hi.reason,
             }
         except Exception as e:
+            # Persist failure metadata for post-mortems / retries.
             await self._runs.set_state(
                 run_id=run.id, status=RunStatus.failed, error=str(e), state=state
             )
@@ -143,6 +159,7 @@ class OrchestrationService:
 
         # Merge decision into state
         state: UseCaseState = dict(run.state or {})
+        # HITL decisions are stored under `state["hitl"]["decision"]` so nodes can read them.
         hitl = dict(state.get("hitl", {}))
         hitl.update({"decision": decision})
         state["hitl"] = hitl
@@ -285,7 +302,7 @@ class OrchestrationService:
             if isinstance(node_state, dict):
                 last_state = node_state  # already a full state snapshot in this stream mode
 
-            # Persist checkpoint
+            # Persist checkpoint (durable state snapshot).
             remediation_attempts = int(last_state.get("remediation_attempts", 0) or 0)
             last_state["_audit_persisted_count"] = persisted_audit_idx
             await self._runs.set_state(
@@ -326,3 +343,8 @@ def _map_artifact_type(raw: str) -> ArtifactType | None:
         "APPROVAL_SUMMARY": ArtifactType.approval_summary,
     }
     return mapping.get(raw)
+
+
+# --- Module Notes -----------------------------------------------------------
+# This service is the transaction boundary: it decides when to commit checkpoints and how to
+# map orchestrator state into durable DB entities (UseCase/Run/Artifact/AuditEvent).

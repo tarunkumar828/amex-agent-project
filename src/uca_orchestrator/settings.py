@@ -1,3 +1,14 @@
+"""
+uca_orchestrator.settings
+
+Central configuration model (Pydantic Settings).
+
+Responsibilities:
+- Provide strongly-typed, env-driven settings for all layers.
+- Hide secrets from repr/logging (e.g., JWT secret).
+- Offer a cached settings instance for dependency injection.
+"""
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -17,6 +28,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="UCA_", case_sensitive=False)
 
+    # Environment controls toggle behavior like auto-init DB tables.
     env: Literal["dev", "test", "prod"] = "dev"
     service_name: str = "uca-orchestrator"
     log_level: str = "INFO"
@@ -42,4 +54,10 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    # Cache avoids re-parsing env vars for each request dependency.
     return Settings()
+
+
+# --- Module Notes -----------------------------------------------------------
+# In a larger org this module often becomes a dependency for every other module;
+# keeping it stable (and well-versioned) reduces operational risk.

@@ -1,3 +1,14 @@
+"""
+uca_orchestrator.api.routers.use_cases
+
+External/public endpoints for use case owners.
+
+Responsibilities:
+- Register a use case (persist submission payload).
+- Start orchestration (execute LangGraph) and return status.
+- Provide read APIs for audit trail and artifacts.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -55,6 +66,7 @@ async def register_use_case(
     session: AsyncSession = Depends(db_session),
     settings: Settings = Depends(settings_dep),
 ) -> UseCaseRegisterResponse:
+    # AuthZ is enforced via router dependencies: role=use_case_owner.
     use_cases = UseCaseRepo(session)
     uc = await use_cases.create(
         owner=principal.subject,
@@ -63,6 +75,7 @@ async def register_use_case(
     )
 
     # Create initial run (execution is explicit via /orchestrate).
+    # We use ASGITransport so "tool calls" can hit internal endpoints in-process (no real network).
     transport = httpx.ASGITransport(app=request.app)
     async with httpx.AsyncClient(
         transport=transport, base_url=str(request.base_url).rstrip("/")
@@ -148,6 +161,7 @@ async def list_audit_events(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(db_session),
 ) -> list[dict[str, Any]]:
+    # Audit is returned newest-first (see AuditRepo); clients can reverse if desired.
     uc = await UseCaseRepo(session).get(use_case_id)
     if uc is None or (uc.owner != principal.subject and not principal.is_admin):
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Use case not found")
@@ -187,3 +201,8 @@ async def list_artifacts(
         }
         for a in artifacts
     ]
+
+
+# --- Module Notes -----------------------------------------------------------
+# This router intentionally does not embed orchestration logic; it delegates to
+# OrchestrationService and returns a compact response.

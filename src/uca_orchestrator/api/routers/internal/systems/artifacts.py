@@ -1,3 +1,13 @@
+"""
+uca_orchestrator.api.routers.internal.systems.artifacts
+
+Artifact status tool endpoint (dummy system).
+
+Responsibilities:
+- Return the set of artifact types currently persisted for a use case.
+- Enable orchestrator gap analysis (required vs present artifacts).
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -22,5 +32,10 @@ async def artifact_status(
     use_case_id: uuid.UUID,
     session: AsyncSession = Depends(db_session),
 ) -> ArtifactStatusResponse:
+    # This endpoint is intentionally lightweight; content retrieval is handled by public APIs.
     artifacts = await ArtifactRepo(session).list_for_use_case(use_case_id)
     return ArtifactStatusResponse(artifact_types=[a.type.value for a in artifacts])
+
+
+# --- Module Notes -----------------------------------------------------------
+# Used by `parallel_fetch_node` to compute missing artifacts accurately.

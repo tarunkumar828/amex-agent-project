@@ -1,3 +1,13 @@
+"""
+uca_orchestrator.orchestrator.state
+
+Typed state schema used by the LangGraph orchestration engine.
+
+Responsibilities:
+- Define the contract between nodes (inputs/outputs).
+- Provide a stable shape for persistence (stored in runs.state).
+"""
+
 from __future__ import annotations
 
 from typing import Any, TypedDict
@@ -27,3 +37,8 @@ class UseCaseState(TypedDict, total=False):
 
     # HITL
     hitl: dict[str, Any]
+
+
+# --- Module Notes -----------------------------------------------------------
+# This TypedDict is intentionally permissive (total=False) because LangGraph nodes may
+# stage internal/transient keys while still producing a valid persisted snapshot.

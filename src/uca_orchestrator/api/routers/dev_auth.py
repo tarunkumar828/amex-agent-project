@@ -1,3 +1,13 @@
+"""
+uca_orchestrator.api.routers.dev_auth
+
+Development-only auth helpers.
+
+Responsibilities:
+- Provide a token minting endpoint to accelerate local testing.
+- Explicitly disable the endpoint in production.
+"""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -28,6 +38,7 @@ async def mint_dev_token(
     body: DevTokenRequest,
     settings: Settings = Depends(get_settings),
 ) -> DevTokenResponse:
+    # Security guardrail: never expose dev token minting in production.
     if settings.env == "prod":
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Not found")
 
@@ -44,3 +55,8 @@ async def mint_dev_token(
         ttl=timedelta(minutes=body.ttl_minutes),
     )
     return DevTokenResponse(access_token=token)
+
+
+# --- Module Notes -----------------------------------------------------------
+# This endpoint is for developer ergonomics only. Real enterprise deployments typically
+# integrate with SSO / OIDC providers and issue service tokens via IAM.

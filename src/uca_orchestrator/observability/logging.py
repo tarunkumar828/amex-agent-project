@@ -1,3 +1,13 @@
+"""
+uca_orchestrator.observability.logging
+
+Structured logging configuration for the service.
+
+Responsibilities:
+- Configure `structlog` for JSON logs suitable for ELK/Splunk/Datadog.
+- Provide a small wrapper for obtaining bound loggers.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -18,6 +28,7 @@ def configure_logging(*, service_name: str, level: str) -> None:
         level=getattr(logging, level.upper(), logging.INFO),
     )
 
+    # structlog processors run on each log event; keep this list focused and stable.
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -35,6 +46,7 @@ def configure_logging(*, service_name: str, level: str) -> None:
 
 
 def _add_service_name(service_name: str):
+    # Adds a stable "service" field for log routing/aggregation across environments.
     def processor(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:
         event_dict.setdefault("service", service_name)
         return event_dict
@@ -44,3 +56,7 @@ def _add_service_name(service_name: str):
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     return structlog.get_logger(name)
+
+
+# --- Module Notes -----------------------------------------------------------
+# Request-scoped metadata is bound via contextvars in `observability.middleware`.

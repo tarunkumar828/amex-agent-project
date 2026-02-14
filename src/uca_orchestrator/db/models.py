@@ -1,3 +1,16 @@
+"""
+uca_orchestrator.db.models
+
+Core persistence schema for the orchestrator.
+
+Responsibilities:
+- Define ORM models representing long-running approvals:
+  - UseCase: business entity and governance snapshots
+  - Run: durable orchestration run state + interrupt context
+  - Artifact: generated documents/rulesets
+  - AuditEvent: append-only audit trail
+"""
+
 from __future__ import annotations
 
 import enum
@@ -12,10 +25,12 @@ from uca_orchestrator.db.base import Base
 
 
 def _utcnow() -> datetime:
+    # Persist naive UTC timestamps for simplicity; production systems may use tz-aware types.
     return datetime.utcnow()
 
 
 class UseCaseStatus(enum.StrEnum):
+    # High-level business status of a use case as observed by the orchestration service.
     registered = "REGISTERED"
     in_progress = "IN_PROGRESS"
     interrupted = "INTERRUPTED"
@@ -25,6 +40,7 @@ class UseCaseStatus(enum.StrEnum):
 
 
 class RunStatus(enum.StrEnum):
+    # Execution status of a particular orchestrator run.
     running = "RUNNING"
     interrupted = "INTERRUPTED"
     completed = "COMPLETED"
@@ -32,6 +48,7 @@ class RunStatus(enum.StrEnum):
 
 
 class ArtifactType(enum.StrEnum):
+    # Enum values are stored in DB; treat as stable API contract.
     redaction_plan = "REDACTION_PLAN"
     model_governance_answers = "MODEL_GOVERNANCE_ANSWERS"
     threat_model = "THREAT_MODEL"
@@ -79,6 +96,7 @@ class Run(Base):
     )
 
     status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), nullable=False, index=True)
+    # `state` stores the LangGraph state snapshot (checkpointed per node execution).
     state: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     remediation_attempts: Mapped[int] = mapped_column(nullable=False, default=0)
 
@@ -134,3 +152,8 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=_utcnow, index=True)
 
     __table_args__ = (Index("ix_audit_use_case_created", "use_case_id", "created_at"),)
+
+
+# --- Module Notes -----------------------------------------------------------
+# JSON columns keep this example flexible across governance payload variations.
+# In stricter environments, consider schema-versioned JSON and validation at write time.

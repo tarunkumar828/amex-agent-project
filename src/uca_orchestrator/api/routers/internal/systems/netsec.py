@@ -1,3 +1,12 @@
+"""
+uca_orchestrator.api.routers.internal.systems.netsec
+
+Dummy NetSec system.
+
+Responsibilities:
+- Provide a baseline security posture check derived from classification snapshot.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -29,9 +38,14 @@ async def netsec_baseline(
     if uc is None:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Use case not found")
 
+    # Simple classification-derived decision; production systems would call scanners / policy engines.
     deployment = (uc.classification or {}).get("deployment_target", "UNKNOWN")
     if deployment == "CLOUD":
         return NetSecResponse(status="PASS", notes="Dummy cloud baseline satisfied")
     if deployment == "ON_PREM":
         return NetSecResponse(status="PASS", notes="Dummy on-prem baseline satisfied")
     return NetSecResponse(status="PENDING", notes="Missing deployment target")
+
+
+# --- Module Notes -----------------------------------------------------------
+# Exposed as a tool endpoint; orchestration can optionally incorporate this into approval logic.

@@ -1,3 +1,12 @@
+"""
+uca_orchestrator.api.routers.internal.systems.hydra
+
+Dummy deployment readiness system ("Hydra").
+
+Responsibilities:
+- Report whether the use case is ready to be deployed (dummy logic here).
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -29,7 +38,11 @@ async def hydra_readiness(
     if uc is None:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Use case not found")
 
-    # Dummy: blocked until approval-ready
+    # Dummy: blocked until approval-ready.
     if uc.status.value == "APPROVAL_READY":
         return HydraResponse(status="READY", notes="Dummy deployment ready")
     return HydraResponse(status="BLOCKED", notes="Approval not complete")
+
+
+# --- Module Notes -----------------------------------------------------------
+# In real platforms this would likely integrate with CI/CD or deployment control planes.

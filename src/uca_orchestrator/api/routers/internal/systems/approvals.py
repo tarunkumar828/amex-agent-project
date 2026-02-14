@@ -1,3 +1,13 @@
+"""
+uca_orchestrator.api.routers.internal.systems.approvals
+
+Dummy approvals system.
+
+Responsibilities:
+- Compute system-by-system approval decisions from persisted snapshots.
+- Write the current approval snapshot back into the UseCase record.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -34,6 +44,7 @@ async def get_approval_status(
     use_case_id: uuid.UUID,
     session: AsyncSession = Depends(db_session),
 ) -> ApprovalStatusResponse:
+    # Internal auth is enforced at router creation: role=internal_system.
     repo = UseCaseRepo(session)
     uc = await repo.get(use_case_id)
     if uc is None:
@@ -47,7 +58,7 @@ async def get_approval_status(
 
     approvals: list[ApprovalItem] = []
 
-    # Model governance
+    # Model governance (example rule: reject if governance Q&A is missing).
     if "MODEL_GOVERNANCE_ANSWERS" in missing:
         approvals.append(
             ApprovalItem(
@@ -57,7 +68,7 @@ async def get_approval_status(
     else:
         approvals.append(ApprovalItem(system="MODEL_GOVERNANCE", state="APPROVED"))
 
-    # NetSec
+    # NetSec (example rule: reject if threat model is missing).
     if "THREAT_MODEL" in missing:
         approvals.append(
             ApprovalItem(system="NETSECOPS", state="REJECTED", comment="Threat model missing")
@@ -65,7 +76,7 @@ async def get_approval_status(
     else:
         approvals.append(ApprovalItem(system="NETSECOPS", state="APPROVED"))
 
-    # Risk/compliance: fail if toxicity too high
+    # Risk/compliance: reject if toxicity too high.
     if toxicity > 0.07:
         approvals.append(
             ApprovalItem(
@@ -75,7 +86,7 @@ async def get_approval_status(
     else:
         approvals.append(ApprovalItem(system="RISK", state="APPROVED"))
 
-    # AI firewall: require rules if prompt injection too high
+    # AI firewall: require rules if prompt injection too high and rules are missing.
     if prompt_inj > 0.07 and "AI_FIREWALL_RULES" in missing:
         approvals.append(
             ApprovalItem(system="AI_FIREWALL", state="REJECTED", comment="Firewall rules required")
@@ -88,3 +99,7 @@ async def get_approval_status(
     await session.commit()
 
     return ApprovalStatusResponse(approvals=approvals, meta={"source": "dummy"})
+
+
+# --- Module Notes -----------------------------------------------------------
+# Approvals are read by the orchestrator during parallel fetch and approval_check.

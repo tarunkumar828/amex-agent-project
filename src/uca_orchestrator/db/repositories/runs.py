@@ -1,3 +1,13 @@
+"""
+uca_orchestrator.db.repositories.runs
+
+Repository for `Run` entities.
+
+Responsibilities:
+- Create and fetch orchestrator runs.
+- Persist checkpoints (state snapshots) and interruption/error metadata.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -15,6 +25,7 @@ class RunRepo:
         self._session = session
 
     async def create(self, *, use_case_id: uuid.UUID, initial_state: dict[str, Any]) -> Run:
+        # A new Run starts in RUNNING state with an initial state snapshot.
         run = Run(
             use_case_id=use_case_id,
             status=RunStatus.running,
@@ -51,6 +62,7 @@ class RunRepo:
         interrupted_payload: dict[str, Any] | None = None,
         error: str | None = None,
     ) -> None:
+        # Checkpoint/state updates are locked to avoid concurrent writers clobbering state.
         run = await self._session.get(Run, run_id, with_for_update=True)
         if run is None:
             return
@@ -67,3 +79,7 @@ class RunRepo:
         if error is not None:
             run.error = error
         run.updated_at = datetime.utcnow()
+
+
+# --- Module Notes -----------------------------------------------------------
+# In this repo, checkpoints are written after each LangGraph node execution.

@@ -1,3 +1,16 @@
+"""
+alembic.env
+
+Alembic migration environment configuration.
+
+Responsibilities:
+- Provide metadata discovery for autogeneration.
+- Configure offline/online migration execution.
+
+Notes:
+- This module is executed by Alembic, not imported by the FastAPI runtime.
+"""
+
 from __future__ import annotations
 
 import os
@@ -7,7 +20,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from uca_orchestrator.db.base import Base
-from uca_orchestrator.db import models  # noqa: F401
+from uca_orchestrator.db import models  # noqa: F401  # ensure models are registered on Base.metadata
 from uca_orchestrator.settings import Settings
 
 
@@ -27,6 +40,7 @@ def _get_database_url() -> str:
 
 
 def run_migrations_offline() -> None:
+    # Offline: emit SQL scripts without a DB connection.
     url = _get_database_url()
     context.configure(
         url=url,
@@ -39,6 +53,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    # Online: run migrations against a live DB connection.
     configuration = config.get_section(config.config_ini_section) or {}
     configuration["sqlalchemy.url"] = _get_database_url()
     connectable = engine_from_config(configuration, prefix="sqlalchemy.", poolclass=pool.NullPool)
@@ -53,4 +68,8 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
+
+
+# --- Module Notes -----------------------------------------------------------
+# Keep this file aligned with SQLAlchemy metadata definitions in `uca_orchestrator.db.models`.
 

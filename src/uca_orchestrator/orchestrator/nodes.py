@@ -1,3 +1,16 @@
+"""
+uca_orchestrator.orchestrator.nodes
+
+LangGraph node implementations + routing functions.
+
+Responsibilities:
+- Implement each step in the approval-orchestration lifecycle:
+  ENTRY, CLASSIFY, PARALLEL_FETCH, GAP_ANALYSIS, ARTIFACT_GENERATION,
+  EVAL_CHECK, APPROVAL_CHECK, REMEDIATION, ESCALATION, FINISH.
+- Append structured audit events into state (later persisted to DB).
+- Keep node logic deterministic and testable (no direct DB writes).
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,6 +23,7 @@ from uca_orchestrator.orchestrator.state import UseCaseState
 
 
 def _append_audit(state: UseCaseState, *, event: str, details: dict[str, Any]) -> None:
+    # State-level audit log is later persisted as durable audit_events rows.
     audit = list(state.get("audit_log", []))
     audit.append({"event": event, "details": details})
     state["audit_log"] = audit
@@ -42,6 +56,7 @@ async def entry_node(state: UseCaseState) -> UseCaseState:
 
 
 async def classify_node(state: UseCaseState) -> UseCaseState:
+    # Minimal deterministic classification from the submission payload.
     payload = state.get("submission_payload", {})
 
     data_classification = (payload.get("data_classification") or "UNKNOWN").upper()
@@ -65,6 +80,7 @@ async def classify_node(state: UseCaseState) -> UseCaseState:
 
 
 async def parallel_fetch_node(state: UseCaseState, *, client: InternalApiClient) -> UseCaseState:
+    # Fan-out tool calls in parallel to minimize orchestration latency.
     use_case_id = state["use_case_id"]
 
     cls = state.get("classification", {})
@@ -111,6 +127,7 @@ def _normalize_approval_snapshot(approvals_resp: dict[str, Any]) -> dict[str, An
 
 
 async def gap_analysis_node(state: UseCaseState) -> UseCaseState:
+    # Compare policy requirements to the artifact types present in persistence.
     policy = state.get("_policy", {})
     required = list(policy.get("required_artifacts", []))
     missing: list[str] = []
@@ -127,6 +144,7 @@ async def gap_analysis_node(state: UseCaseState) -> UseCaseState:
 
 
 async def artifact_generation_node(state: UseCaseState) -> UseCaseState:
+    # Dummy artifact generation. In production, this would call an LLM or template engine.
     missing = list(state.get("missing_artifacts", []))
     generated = {}
     for art in missing:
@@ -153,6 +171,7 @@ def _generate_artifact(*, artifact_type: str, state: UseCaseState) -> str:
 
 
 async def eval_check_node(state: UseCaseState, *, client: InternalApiClient) -> UseCaseState:
+    # Ensure all required evaluations are present; trigger missing ones.
     policy = state.get("_policy", {})
     required_evals = list(policy.get("required_evaluations", []))
     metrics = dict(state.get("eval_metrics", {}))
@@ -193,6 +212,7 @@ def _metric_key(eval_name: str) -> str:
 
 
 async def approval_check_node(state: UseCaseState, *, client: InternalApiClient) -> UseCaseState:
+    # Evaluate governance approval status and determine if any systems rejected.
     resp = await client.approval_status(use_case_id=_uuid(state["use_case_id"]))
     snapshot = _normalize_approval_snapshot(resp)
     state["approval_status"] = snapshot
@@ -208,6 +228,7 @@ async def approval_check_node(state: UseCaseState, *, client: InternalApiClient)
 
 
 async def remediation_node(state: UseCaseState) -> UseCaseState:
+    # Decide corrective actions and increment remediation counter.
     attempts = int(state.get("remediation_attempts", 0) or 0) + 1
     state["remediation_attempts"] = attempts
 
@@ -229,6 +250,7 @@ async def remediation_node(state: UseCaseState) -> UseCaseState:
 
 
 async def escalation_node(state: UseCaseState, *, max_attempts: int) -> UseCaseState:
+    # Trigger HITL interrupt for high risk or repeated failed remediation.
     risk = state.get("risk_level", "UNKNOWN")
     attempts = int(state.get("remediation_attempts", 0) or 0)
     if risk == "HIGH" or attempts >= max_attempts:
@@ -280,3 +302,8 @@ def _lit(
 ) -> Literal["PCI", "NON_PCI", "UNKNOWN", "CLOUD", "ON_PREM", "INTERNAL", "EXTERNAL"]:
     # Type helper for InternalApiClient signature; runtime is just strings.
     return v  # type: ignore[return-value]
+
+
+# --- Module Notes -----------------------------------------------------------
+# Nodes should not perform DB writes directly; persistence is owned by the service layer.
+# Tool calls are mediated through `InternalApiClient` to preserve a stable integration boundary.

@@ -1,3 +1,12 @@
+"""
+uca_orchestrator.api.routers.runs
+
+Run-level endpoints (primarily HITL resume).
+
+Responsibilities:
+- Allow governance reviewers to resume interrupted runs by supplying a decision payload.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -35,13 +44,19 @@ async def resume_run(
     session: AsyncSession = Depends(db_session),
     settings: Settings = Depends(settings_dep),
 ) -> dict[str, Any]:
+    # AuthZ is enforced by router dependencies: role=governance_reviewer.
     run = await RunRepo(session).get(run_id)
     if run is None:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Run not found")
 
+    # Use ASGITransport for in-process tool calls during resume execution.
     transport = httpx.ASGITransport(app=request.app)
     async with httpx.AsyncClient(
         transport=transport, base_url=str(request.base_url).rstrip("/")
     ) as http:
         svc = OrchestrationService(session=session, settings=settings, http=http)
         return await svc.resume(run_id=run_id, actor=principal.subject, decision=body.decision)
+
+
+# --- Module Notes -----------------------------------------------------------
+# Resumes are intentionally separate from use-case owner routes to reflect governance workflows.

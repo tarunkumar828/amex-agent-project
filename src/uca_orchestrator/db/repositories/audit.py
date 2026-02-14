@@ -1,3 +1,13 @@
+"""
+uca_orchestrator.db.repositories.audit
+
+Repository for `AuditEvent` entities.
+
+Responsibilities:
+- Append audit events (agent/system/user actions).
+- Query audit trail by use case for transparency and compliance.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -22,6 +32,7 @@ class AuditRepo:
         event_type: str,
         details: dict[str, Any],
     ) -> AuditEvent:
+        # Audit events are append-only (no update/delete) in normal operation.
         ev = AuditEvent(
             use_case_id=use_case_id,
             run_id=run_id,
@@ -36,6 +47,7 @@ class AuditRepo:
     async def list_for_use_case(
         self, use_case_id: uuid.UUID, *, limit: int = 200
     ) -> list[AuditEvent]:
+        # Order newest-first for UI consumption; reverse client-side if needed.
         stmt = (
             select(AuditEvent)
             .where(AuditEvent.use_case_id == use_case_id)
@@ -43,3 +55,7 @@ class AuditRepo:
             .limit(limit)
         )
         return list((await self._session.execute(stmt)).scalars().all())
+
+
+# --- Module Notes -----------------------------------------------------------
+# This repo is used heavily by orchestration checkpointing; keep queries indexed.

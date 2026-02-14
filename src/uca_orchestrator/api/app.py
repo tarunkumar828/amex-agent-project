@@ -1,3 +1,14 @@
+"""
+uca_orchestrator.api.app
+
+FastAPI app factory for the UCA Orchestrator service.
+
+Responsibilities:
+- Build the FastAPI application and register routers/middleware.
+- Initialize and dispose shared infrastructure (DB engine/session factory).
+- Provide a single composition root where cross-cutting concerns live.
+"""
+
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -17,6 +28,7 @@ log = get_logger(__name__)
 
 
 def create_app(*, settings: Settings) -> FastAPI:
+    # Configure structured logging once at process startup (before app serves requests).
     configure_logging(service_name=settings.service_name, level=settings.log_level)
 
     app = FastAPI(
@@ -36,17 +48,26 @@ def create_app(*, settings: Settings) -> FastAPI:
     @app.on_event("startup")
     async def _startup() -> None:
         log.info("startup", env=settings.env)
+        # Create the async DB engine and session factory once and stash them on app.state.
+        # Routers obtain sessions via dependencies (see `uca_orchestrator.api.deps`).
         engine = create_engine(settings)
         app.state.engine = engine
         app.state.sessionmaker = create_sessionmaker(engine)
         if settings.env in ("dev", "test"):
+            # Dev/test convenience: create tables automatically. Prod should use Alembic migrations.
             await init_db(engine)
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
+        # Dispose the engine to close pools/FDs gracefully.
         engine = getattr(app.state, "engine", None)
         if engine is not None:
             await engine.dispose()
         log.info("shutdown")
 
     return app
+
+
+# --- Module Notes -----------------------------------------------------------
+# This file is intentionally small: app composition stays here; business logic stays
+# in routers/services/orchestrator layers.
