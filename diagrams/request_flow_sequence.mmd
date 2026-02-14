@@ -1,0 +1,61 @@
+sequenceDiagram
+  autonumber
+  actor U as Use Case Owner
+  participant API as FastAPI (Public Routers)
+  participant AUTH as JWT/RBAC
+  participant SVC as OrchestrationService
+  participant DB as DB (use_cases/runs/artifacts/audit_events)
+  participant LG as LangGraph (Compiled Graph)
+  participant C as InternalApiClient (JWT internal_system)
+  participant INT as Internal APIs (/internal/v1/*)
+
+  U->>API: POST /v1/use-cases/register (submission_payload)
+  API->>AUTH: Verify JWT + require_roles(use_case_owner)
+  AUTH-->>API: Principal(subject, roles)
+  API->>SVC: create UseCase + start Run
+  SVC->>DB: INSERT use_cases
+  SVC->>DB: INSERT runs (initial state)
+  SVC->>DB: INSERT audit_events (USE_CASE_REGISTERED, RUN_CREATED)
+  SVC-->>API: {use_case_id, run_id}
+  API-->>U: 200 OK
+
+  U->>API: POST /v1/use-cases/{id}/orchestrate
+  API->>AUTH: Verify JWT + RBAC
+  AUTH-->>API: Principal
+  API->>SVC: execute(run_id/latest)
+
+  SVC->>LG: build_graph(client,max_attempts)
+  loop For each node update (checkpointing)
+    SVC->>LG: astream(state, stream_mode="updates")
+    LG-->>SVC: {node_name: updated_state}
+    SVC->>DB: UPDATE runs.state (checkpoint)
+    SVC->>DB: INSERT audit_events (incremental node audit)
+    Note over SVC,DB: Commit after each node for durability
+  end
+
+  rect rgba(230,230,255,0.35)
+    Note over LG,C: Tool calling from nodes (parallel_fetch/eval_check/approval_check)
+    LG->>C: registration_status / policy_requirements / approval_status / eval_status / artifact_status
+    C->>C: Mint short-lived JWT (role=internal_system)
+    C->>INT: Call /internal/v1/* (Authorization: Bearer ...)
+    INT->>DB: Read/write snapshots (dummy behavior)
+    INT-->>C: JSON response
+    C-->>LG: Tool result
+  end
+
+  alt Approval-ready
+    SVC->>DB: UPDATE runs.status=COMPLETED
+    SVC->>DB: UPDATE use_cases.status=APPROVAL_READY + snapshots
+    SVC->>DB: UPSERT artifacts (generated)
+    SVC->>DB: INSERT audit_events (final)
+    SVC-->>API: {status: APPROVAL_READY, use_case_id, run_id}
+    API-->>U: 200 OK
+  else HITL interrupt
+    LG-->>SVC: raise HumanInterrupt(reason,payload)
+    SVC->>DB: UPDATE runs.status=INTERRUPTED + interrupted_payload
+    SVC->>DB: UPDATE use_cases.status=INTERRUPTED
+    SVC->>DB: INSERT audit_events (HITL_INTERRUPT)
+    SVC-->>API: {status: INTERRUPTED, reason, use_case_id, run_id}
+    API-->>U: 200 OK
+  end
+

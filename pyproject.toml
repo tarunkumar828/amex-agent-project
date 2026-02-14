@@ -1,0 +1,46 @@
+[project]
+name = "uca-orchestrator"
+version = "0.1.0"
+description = "Use Case Approval Orchestrator Agent (LangGraph + FastAPI)"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "Proprietary" }
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["alembic"]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W",
+  "I",
+  "B",
+  "UP",
+  "SIM",
+  "RUF",
+]
+ignore = ["E501"] # enforce via formatter/line length; keep pragmatism for OpenAPI, etc.
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["uca_orchestrator"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/uca_orchestrator/api/**/*.py" = ["B008"]
+"src/uca_orchestrator/auth/**/*.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+check_untyped_defs = true
+strict_equality = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+

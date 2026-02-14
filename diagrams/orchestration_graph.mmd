@@ -1,0 +1,28 @@
+stateDiagram-v2
+  [*] --> ENTRY
+
+  ENTRY --> CLASSIFY
+  CLASSIFY --> PARALLEL_FETCH
+
+  PARALLEL_FETCH --> GAP_ANALYSIS
+
+  GAP_ANALYSIS --> ARTIFACT_GENERATION: missing_artifacts != []
+  GAP_ANALYSIS --> EVAL_CHECK: missing_artifacts == []
+
+  ARTIFACT_GENERATION --> EVAL_CHECK
+
+  EVAL_CHECK --> REMEDIATION: eval_failed == true
+  EVAL_CHECK --> APPROVAL_CHECK: eval_failed == false
+
+  APPROVAL_CHECK --> REMEDIATION: approvals_rejected == true
+  APPROVAL_CHECK --> FINISH: approvals_rejected == false
+
+  REMEDIATION --> ESCALATION
+
+  ESCALATION --> INTERRUPT: risk_level == HIGH OR remediation_attempts >= max_attempts
+  ESCALATION --> ARTIFACT_GENERATION: missing_artifacts != []
+  ESCALATION --> EVAL_CHECK: missing_artifacts == []
+
+  INTERRUPT --> [*]
+  FINISH --> [*]
+

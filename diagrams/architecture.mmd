@@ -1,0 +1,132 @@
+flowchart LR
+  %% =========================
+  %% External Actors
+  %% =========================
+  UCO[Use Case Owner]
+  GOV[Governance Reviewer]
+
+  %% =========================
+  %% Edge / API Service
+  %% =========================
+  subgraph API["FastAPI Service: uca-orchestrator"]
+    direction TB
+
+    subgraph OBS["Observability"]
+      LOG[Structured JSON logs structlog]
+      RID["Request Context Middleware<br/>x-request-id + contextvars"]
+    end
+
+    subgraph AUTH["AuthN/AuthZ"]
+      JWT["JWT Verify<br/>iss/aud/exp/sub"]
+      RBAC["RBAC<br/>use_case_owner / governance_reviewer / admin"]
+      DEV["Dev Token Mint non-prod<br/>POST /v1/dev/token"]
+    end
+
+    subgraph PUBLIC["Public API External"]
+      REG["POST /v1/use-cases/register"]
+      ORCH["POST /v1/use-cases/{id}/orchestrate"]
+      UCGET["GET /v1/use-cases/{id}"]
+      UCAUD["GET /v1/use-cases/{id}/audit"]
+      UCART["GET /v1/use-cases/{id}/artifacts"]
+      RESUME["POST /v1/runs/{run_id}/resume"]
+      HEALTH["GET /healthz<br/>GET /readyz"]
+    end
+
+    subgraph SVC["Service Layer"]
+      OS["OrchestrationService<br/>start/execute/resume"]
+    end
+
+    subgraph ORCHENG["Orchestrator LangGraph"]
+      G["CompiledStateGraph<br/>build_graph()"]
+      NODES["Nodes + Routing<br/>ENTRY/CLASSIFY/PARALLEL_FETCH/<br/>GAP/ARTIFACT_GEN/EVAL_CHECK/<br/>APPROVAL_CHECK/REMEDIATION/ESCALATION/FINISH"]
+      HITL["HITL Interrupt<br/>HumanInterrupt reason,payload"]
+    end
+
+    subgraph TOOLS["Governance Tools Internal APIs"]
+      direction TB
+      INTGW["Internal Router<br/>/internal/v1/*<br/>RBAC: internal_system"]
+      REGAPI["Registration API<br/>/internal/v1/registration"]
+      POLAPI["Policy API<br/>/internal/v1/policy"]
+      APPAPI["Approvals API<br/>/internal/v1/approvals"]
+      EVALAPI["Evaluations API<br/>/internal/v1/evaluations"]
+      ARTSTAT["Artifact Status Tool<br/>/internal/v1/artifacts"]
+      NETSEC["NetSec API<br/>/internal/v1/netsec"]
+      FIREWALL["AI Firewall API<br/>/internal/v1/firewall"]
+      HYDRA["Hydra API<br/>/internal/v1/hydra"]
+    end
+
+    subgraph DB["Persistence SQLAlchemy Async"]
+      direction TB
+      UC[(use_cases)]
+      RUN["(runs<br/>state checkpoints)"]
+      ART[(artifacts)]
+      AUD[(audit_events)]
+    end
+
+    subgraph CLIENTS["Tool Client Boundary"]
+      ICLIENT["InternalApiClient<br/>httpx + short-lived JWT<br/>role=internal_system"]
+    end
+  end
+
+  %% =========================
+  %% External request paths
+  %% =========================
+  UCO -->|Bearer JWT| REG
+  UCO -->|Bearer JWT| ORCH
+  UCO -->|Bearer JWT| UCGET
+  UCO -->|Bearer JWT| UCAUD
+  UCO -->|Bearer JWT| UCART
+  GOV -->|Bearer JWT| RESUME
+
+  %% =========================
+  %% Cross-cutting
+  %% =========================
+  RID --> LOG
+  REG --> JWT --> RBAC
+  ORCH --> JWT --> RBAC
+  RESUME --> JWT --> RBAC
+
+  %% =========================
+  %% Public API to service
+  %% =========================
+  REG --> OS
+  ORCH --> OS
+  RESUME --> OS
+
+  %% =========================
+  %% Service to DB
+  %% =========================
+  OS --> UC
+  OS --> RUN
+  OS --> ART
+  OS --> AUD
+
+  %% =========================
+  %% Service to orchestrator
+  %% =========================
+  OS --> G
+  G --> NODES
+  NODES --> HITL
+
+  %% =========================
+  %% Orchestrator tool calls
+  %% =========================
+  NODES --> ICLIENT --> INTGW
+  INTGW --> REGAPI
+  INTGW --> POLAPI
+  INTGW --> APPAPI
+  INTGW --> EVALAPI
+  INTGW --> ARTSTAT
+  INTGW --> NETSEC
+  INTGW --> FIREWALL
+  INTGW --> HYDRA
+
+  %% =========================
+  %% Internal tools persist/read via same DB
+  %% =========================
+  REGAPI --> UC
+  POLAPI --> UC
+  APPAPI --> UC
+  EVALAPI --> UC
+  ARTSTAT --> ART
+  FIREWALL --> ART

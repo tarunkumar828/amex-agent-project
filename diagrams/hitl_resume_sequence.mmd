@@ -1,0 +1,23 @@
+sequenceDiagram
+  autonumber
+  actor G as Governance Reviewer
+  participant API as FastAPI (Runs Router)
+  participant AUTH as JWT/RBAC
+  participant SVC as OrchestrationService
+  participant DB as DB (runs/audit_events)
+  participant LG as LangGraph
+
+  G->>API: POST /v1/runs/{run_id}/resume {decision}
+  API->>AUTH: Verify JWT + require_roles(governance_reviewer)
+  AUTH-->>API: Principal
+  API->>SVC: resume(run_id, decision)
+
+  SVC->>DB: SELECT runs.state
+  SVC->>DB: UPDATE runs.state (merge hitl.decision) + status=RUNNING
+  SVC->>DB: INSERT audit_events (RUN_RESUMED)
+
+  SVC->>LG: execute again (checkpoint streaming)
+  LG-->>SVC: node updates / possible interrupt / finish
+  SVC-->>API: {status: APPROVAL_READY | INTERRUPTED, ...}
+  API-->>G: 200 OK
+

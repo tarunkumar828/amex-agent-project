@@ -1,0 +1,29 @@
+services:
+  api:
+    build: .
+    environment:
+      - PYTHONPATH=/app/src
+      - UCA_API_HOST=0.0.0.0
+      - UCA_API_PORT=8080
+      - UCA_DATABASE_URL=postgresql+asyncpg://uca:uca@postgres:5432/uca
+      - UCA_JWT_SECRET=dev-secret-change-me
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=uca
+      - POSTGRES_USER=uca
+      - POSTGRES_PASSWORD=uca
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uca -d uca"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
