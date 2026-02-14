@@ -13,7 +13,6 @@ Responsibilities:
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from typing import Any, Literal
 
@@ -22,11 +21,12 @@ from uca_orchestrator.orchestrator.interrupts import HumanInterrupt
 from uca_orchestrator.orchestrator.state import UseCaseState
 
 
-def _append_audit(state: UseCaseState, *, event: str, details: dict[str, Any]) -> None:
-    # State-level audit log is later persisted as durable audit_events rows.
-    audit = list(state.get("audit_log", []))
-    audit.append({"event": event, "details": details})
-    state["audit_log"] = audit
+def _audit(event: str, details: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Produce a single audit entry. Reducer `append_audit` concatenates these across nodes.
+    """
+
+    return [{"event": event, "details": details}]
 
 
 async def entry_node(state: UseCaseState) -> UseCaseState:
@@ -41,18 +41,23 @@ async def entry_node(state: UseCaseState) -> UseCaseState:
     if "submission_payload" in state and not isinstance(state["submission_payload"], dict):
         raise ValueError("submission_payload must be a dict")
 
-    state.setdefault("submission_payload", {})
-    state.setdefault("classification", {})
-    state.setdefault("missing_artifacts", [])
-    state.setdefault("approval_status", {})
-    state.setdefault("eval_metrics", {})
-    state.setdefault("risk_level", "UNKNOWN")
-    state.setdefault("remediation_attempts", 0)
-    state.setdefault("escalation_required", False)
-    state.setdefault("audit_log", [])
-
-    _append_audit(state, event="ENTRY", details={})
-    return state
+    # Entry initializes stable defaults. This node runs first, so overwrites are safe.
+    return {
+        "use_case_id": state["use_case_id"],
+        "submission_payload": state.get("submission_payload", {}),
+        "classification": state.get("classification", {}),
+        "missing_artifacts": state.get("missing_artifacts", []),
+        "approval_status": state.get("approval_status", {}),
+        "eval_metrics": state.get("eval_metrics", {}),
+        "policy": state.get("policy", {}),
+        "artifact_types_present": state.get("artifact_types_present", []),
+        "risk_level": state.get("risk_level", "UNKNOWN"),
+        "remediation_attempts": int(state.get("remediation_attempts", 0) or 0),
+        "escalation_required": bool(state.get("escalation_required", False)),
+        "eval_failed": state.get("eval_failed"),
+        "approval_rejected": state.get("approval_rejected"),
+        "audit_log": _audit("ENTRY", {}),
+    }
 
 
 async def classify_node(state: UseCaseState) -> UseCaseState:
@@ -69,50 +74,53 @@ async def classify_node(state: UseCaseState) -> UseCaseState:
     elif deployment_target == "CLOUD":
         risk = "MEDIUM"
 
-    state["classification"] = {
+    classification = {
         "data_classification": data_classification,
         "deployment_target": deployment_target,
         "model_provider": model_provider,
     }
-    state["risk_level"] = risk
-    _append_audit(state, event="CLASSIFY", details={"risk_level": risk, **state["classification"]})
-    return state
+    return {
+        "classification": classification,
+        "risk_level": risk,
+        "audit_log": _audit("CLASSIFY", {"risk_level": risk, **classification}),
+    }
 
-
-async def parallel_fetch_node(state: UseCaseState, *, client: InternalApiClient) -> UseCaseState:
-    # Fan-out tool calls in parallel to minimize orchestration latency.
+async def fetch_registration_node(state: UseCaseState, *, client: InternalApiClient) -> UseCaseState:
     use_case_id = state["use_case_id"]
+    reg = await client.registration_status(use_case_id=_uuid(use_case_id))
+    payload = reg.get("submission_payload", {})
+    return {"submission_payload": payload, "audit_log": _audit("FETCH_REGISTRATION", {})}
 
+
+async def fetch_policy_node(state: UseCaseState, *, client: InternalApiClient) -> UseCaseState:
     cls = state.get("classification", {})
-    data_classification = cls.get("data_classification", "UNKNOWN")
-    deployment_target = cls.get("deployment_target", "UNKNOWN")
-    model_provider = cls.get("model_provider", "UNKNOWN")
-
-    reg_coro = client.registration_status(use_case_id=_uuid(use_case_id))
-    policy_coro = client.policy_requirements(
-        data_classification=_lit(data_classification),
-        deployment_target=_lit(deployment_target),
-        model_provider=_lit(model_provider),
+    policy = await client.policy_requirements(
+        data_classification=_lit(str(cls.get("data_classification", "UNKNOWN"))),
+        deployment_target=_lit(str(cls.get("deployment_target", "UNKNOWN"))),
+        model_provider=_lit(str(cls.get("model_provider", "UNKNOWN"))),
     )
-    approvals_coro = client.approval_status(use_case_id=_uuid(use_case_id))
-    eval_coro = client.eval_status(use_case_id=_uuid(use_case_id))
-    artifacts_coro = client.artifact_status(use_case_id=_uuid(use_case_id))
+    return {"policy": policy, "audit_log": _audit("FETCH_POLICY", {"meta": policy.get("meta", {})})}
 
-    reg, policy, approvals, evals, artifacts = await asyncio.gather(
-        reg_coro, policy_coro, approvals_coro, eval_coro, artifacts_coro
-    )
 
-    state["submission_payload"] = reg.get("submission_payload", state.get("submission_payload", {}))
-    state["approval_status"] = _normalize_approval_snapshot(approvals)
-    state["eval_metrics"] = evals.get("eval_metrics", {})
-    state["_policy"] = policy  # internal key (not in TypedDict on purpose)
-    state["_artifact_types_present"] = list(artifacts.get("artifact_types", []))
-    _append_audit(
-        state,
-        event="PARALLEL_FETCH",
-        details={"policy": policy, "approvals": approvals, "evals": evals, "artifacts": artifacts},
-    )
-    return state
+async def fetch_approvals_node(state: UseCaseState, *, client: InternalApiClient) -> UseCaseState:
+    use_case_id = state["use_case_id"]
+    approvals = await client.approval_status(use_case_id=_uuid(use_case_id))
+    snapshot = _normalize_approval_snapshot(approvals)
+    return {"approval_status": snapshot, "audit_log": _audit("FETCH_APPROVALS", {})}
+
+
+async def fetch_eval_status_node(state: UseCaseState, *, client: InternalApiClient) -> UseCaseState:
+    use_case_id = state["use_case_id"]
+    evals = await client.eval_status(use_case_id=_uuid(use_case_id))
+    metrics = evals.get("eval_metrics", {})
+    return {"eval_metrics": metrics, "audit_log": _audit("FETCH_EVAL_STATUS", {})}
+
+
+async def fetch_artifacts_status_node(state: UseCaseState, *, client: InternalApiClient) -> UseCaseState:
+    use_case_id = state["use_case_id"]
+    artifacts = await client.artifact_status(use_case_id=_uuid(use_case_id))
+    present = list(artifacts.get("artifact_types", []))
+    return {"artifact_types_present": present, "audit_log": _audit("FETCH_ARTIFACT_STATUS", {})}
 
 
 def _normalize_approval_snapshot(approvals_resp: dict[str, Any]) -> dict[str, Any]:
@@ -128,19 +136,17 @@ def _normalize_approval_snapshot(approvals_resp: dict[str, Any]) -> dict[str, An
 
 async def gap_analysis_node(state: UseCaseState) -> UseCaseState:
     # Compare policy requirements to the artifact types present in persistence.
-    policy = state.get("_policy", {})
+    policy = state.get("policy", {})
     required = list(policy.get("required_artifacts", []))
     missing: list[str] = []
 
-    present = set(state.get("_artifact_types_present", []))
+    present = set(state.get("artifact_types_present", []))
     for a in required:
         if str(a) in present:
             continue
         missing.append(str(a))
 
-    state["missing_artifacts"] = missing
-    _append_audit(state, event="GAP_ANALYSIS", details={"required": required, "missing": missing})
-    return state
+    return {"missing_artifacts": missing, "audit_log": _audit("GAP_ANALYSIS", {"required": required, "missing": missing})}
 
 
 async def artifact_generation_node(state: UseCaseState) -> UseCaseState:
@@ -150,10 +156,12 @@ async def artifact_generation_node(state: UseCaseState) -> UseCaseState:
     for art in missing:
         generated[art] = _generate_artifact(artifact_type=art, state=state)
 
-    state["_generated_artifacts"] = generated
-    state["missing_artifacts"] = []  # once generated, considered satisfied in dummy world
-    _append_audit(state, event="ARTIFACT_GENERATION", details={"generated": list(generated.keys())})
-    return state
+    # Note: missing_artifacts is cleared after generation in this dummy system.
+    return {
+        "generated_artifacts": generated,
+        "missing_artifacts": [],
+        "audit_log": _audit("ARTIFACT_GENERATION", {"generated": list(generated.keys())}),
+    }
 
 
 def _generate_artifact(*, artifact_type: str, state: UseCaseState) -> str:
@@ -172,7 +180,7 @@ def _generate_artifact(*, artifact_type: str, state: UseCaseState) -> str:
 
 async def eval_check_node(state: UseCaseState, *, client: InternalApiClient) -> UseCaseState:
     # Ensure all required evaluations are present; trigger missing ones.
-    policy = state.get("_policy", {})
+    policy = state.get("policy", {})
     required_evals = list(policy.get("required_evaluations", []))
     metrics = dict(state.get("eval_metrics", {}))
 
@@ -182,23 +190,24 @@ async def eval_check_node(state: UseCaseState, *, client: InternalApiClient) -> 
             use_case_id=_uuid(state["use_case_id"]), evaluations=missing_evals
         )
         metrics = resp.get("eval_metrics", metrics)
-        state["eval_metrics"] = metrics
-        _append_audit(
-            state,
-            event="EVAL_TRIGGERED",
-            details={"evaluations": missing_evals, "metrics": metrics},
-        )
+        eval_audit = _audit("EVAL_TRIGGERED", {"evaluations": missing_evals})
+    else:
+        eval_audit = []
 
     # Evaluate thresholds
     toxicity = float(metrics.get("toxicity", 0.0) or 0.0)
     if toxicity > 0.07:
-        state["_eval_failed"] = {"reason": "toxicity", "value": toxicity}
-        _append_audit(state, event="EVAL_FAILED", details={"toxicity": toxicity})
+        failed = {"reason": "toxicity", "value": toxicity}
+        status_audit = _audit("EVAL_FAILED", {"toxicity": toxicity})
     else:
-        state.pop("_eval_failed", None)
-        _append_audit(state, event="EVAL_OK", details={"toxicity": toxicity})
+        failed = None
+        status_audit = _audit("EVAL_OK", {"toxicity": toxicity})
 
-    return state
+    return {
+        "eval_metrics": metrics,
+        "eval_failed": failed,
+        "audit_log": [*eval_audit, *status_audit],
+    }
 
 
 def _metric_key(eval_name: str) -> str:
@@ -215,38 +224,33 @@ async def approval_check_node(state: UseCaseState, *, client: InternalApiClient)
     # Evaluate governance approval status and determine if any systems rejected.
     resp = await client.approval_status(use_case_id=_uuid(state["use_case_id"]))
     snapshot = _normalize_approval_snapshot(resp)
-    state["approval_status"] = snapshot
 
     rejected = [k for k, v in snapshot.items() if str(v.get("state")) == "REJECTED"]
     if rejected:
-        state["_approval_rejected"] = {"systems": rejected}
-        _append_audit(state, event="APPROVAL_REJECTED", details={"systems": rejected})
+        approval_rejected = {"systems": rejected}
+        audit = _audit("APPROVAL_REJECTED", {"systems": rejected})
     else:
-        state.pop("_approval_rejected", None)
-        _append_audit(state, event="APPROVAL_OK", details={})
-    return state
+        approval_rejected = None
+        audit = _audit("APPROVAL_OK", {})
+
+    return {"approval_status": snapshot, "approval_rejected": approval_rejected, "audit_log": audit}
 
 
 async def remediation_node(state: UseCaseState) -> UseCaseState:
     # Decide corrective actions and increment remediation counter.
     attempts = int(state.get("remediation_attempts", 0) or 0) + 1
-    state["remediation_attempts"] = attempts
 
     # Dummy remediation: if eval failed toxicity, add a firewall rules artifact request
-    if state.get("_eval_failed"):
-        state["missing_artifacts"] = list(
-            dict.fromkeys([*list(state.get("missing_artifacts", [])), "AI_FIREWALL_RULES"])
-        )
-        _append_audit(
-            state,
-            event="REMEDIATION_PLANNED",
-            details={"attempt": attempts, "action": "add_ai_firewall_rules"},
+    missing = list(state.get("missing_artifacts", []))
+    if state.get("eval_failed"):
+        missing = list(dict.fromkeys([*missing, "AI_FIREWALL_RULES"]))
+        audit = _audit(
+            "REMEDIATION_PLANNED", {"attempt": attempts, "action": "add_ai_firewall_rules"}
         )
     else:
-        _append_audit(
-            state, event="REMEDIATION_PLANNED", details={"attempt": attempts, "action": "noop"}
-        )
-    return state
+        audit = _audit("REMEDIATION_PLANNED", {"attempt": attempts, "action": "noop"})
+
+    return {"remediation_attempts": attempts, "missing_artifacts": missing, "audit_log": audit}
 
 
 async def escalation_node(state: UseCaseState, *, max_attempts: int) -> UseCaseState:
@@ -261,9 +265,9 @@ async def escalation_node(state: UseCaseState, *, max_attempts: int) -> UseCaseS
             "approval_status": state.get("approval_status", {}),
             "eval_metrics": state.get("eval_metrics", {}),
         }
-        _append_audit(state, event="ESCALATION_REQUIRED", details=payload)
+        # The exception is caught by the service layer which persists interrupt details.
         raise HumanInterrupt(reason="Human approval required", payload=payload)
-    return state
+    return {"audit_log": _audit("ESCALATION_SKIPPED", {"attempts": attempts, "risk_level": risk})}
 
 
 def route_after_gap(state: UseCaseState) -> str:
@@ -273,13 +277,13 @@ def route_after_gap(state: UseCaseState) -> str:
 
 
 def route_after_eval(state: UseCaseState) -> str:
-    if state.get("_eval_failed"):
+    if state.get("eval_failed"):
         return "remediation"
     return "approval_check"
 
 
 def route_after_approval(state: UseCaseState) -> str:
-    if state.get("_approval_rejected"):
+    if state.get("approval_rejected"):
         return "remediation"
     return "finish"
 

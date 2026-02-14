@@ -10,7 +10,9 @@ Responsibilities:
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
+
+from uca_orchestrator.orchestrator.reducers import append_audit, merge_dicts
 
 
 class UseCaseState(TypedDict, total=False):
@@ -20,23 +22,37 @@ class UseCaseState(TypedDict, total=False):
 
     # Inputs/snapshots
     submission_payload: dict[str, Any]
-    classification: dict[str, Any]
+    classification: Annotated[dict[str, Any], merge_dicts]
 
     # Governance view
     missing_artifacts: list[str]
-    approval_status: dict[str, Any]
-    eval_metrics: dict[str, Any]
+    approval_status: Annotated[dict[str, Any], merge_dicts]
+    eval_metrics: Annotated[dict[str, Any], merge_dicts]
+
+    # Policy + artifact presence (used for gap analysis)
+    policy: dict[str, Any]
+    artifact_types_present: list[str]
+
+    # Generated artifacts (persisted by service layer)
+    generated_artifacts: dict[str, str]
 
     # Orchestration controls
     risk_level: str
     remediation_attempts: int
     escalation_required: bool
 
+    # Derived control flags (kept explicit for routing)
+    eval_failed: dict[str, Any] | None
+    approval_rejected: dict[str, Any] | None
+
     # Audit
-    audit_log: list[dict[str, Any]]
+    audit_log: Annotated[list[dict[str, Any]], append_audit]
 
     # HITL
     hitl: dict[str, Any]
+
+    # Internal bookkeeping for incremental persistence (service layer).
+    _audit_persisted_count: int
 
 
 # --- Module Notes -----------------------------------------------------------

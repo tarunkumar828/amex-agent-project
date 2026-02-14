@@ -261,12 +261,17 @@ class UseCaseState(TypedDict):
     use_case_id: str
     submission_payload: dict
     classification: dict
+    policy: dict
+    artifact_types_present: list
     missing_artifacts: list
     approval_status: dict
     eval_metrics: dict
     risk_level: str
     remediation_attempts: int
     escalation_required: bool
+    eval_failed: dict | None
+    approval_rejected: dict | None
+    generated_artifacts: dict
     audit_log: list
 ```
 
@@ -297,6 +302,11 @@ Fan-out:
 * Policy requirements
 * Approval status
 * Eval status
+* Artifact status (for accurate gap analysis)
+
+Reducers:
+
+* When fetch calls are modeled as true parallel graph nodes (fan-out/fan-in), **reducers** are used to merge concurrent partial updates safely (e.g., append-only `audit_log`, dict merges for snapshots).
 
 ---
 
@@ -361,7 +371,8 @@ Return approval-ready status.
 ```
 ENTRY
  → CLASSIFY
- → PARALLEL_FETCH
+ → FETCH_* (parallel fan-out)
+ → (fan-in barrier)
  → GAP_ANALYSIS
  → ARTIFACT_GENERATION (if needed)
  → EVAL_CHECK
@@ -395,7 +406,13 @@ return "APPROVAL_CHECK"
 # 1️⃣4️⃣ Parallel Execution Example
 
 ```python
-return ["fetch_policy", "fetch_approvals", "fetch_eval_status"]
+return [
+    "fetch_registration",
+    "fetch_policy",
+    "fetch_approvals",
+    "fetch_eval_status",
+    "fetch_artifacts_status",
+]
 ```
 
 Reducers merge results safely.

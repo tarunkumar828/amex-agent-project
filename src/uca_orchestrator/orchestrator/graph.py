@@ -21,8 +21,12 @@ from uca_orchestrator.orchestrator.nodes import (
     entry_node,
     escalation_node,
     eval_check_node,
+    fetch_approvals_node,
+    fetch_artifacts_status_node,
+    fetch_eval_status_node,
+    fetch_policy_node,
+    fetch_registration_node,
     gap_analysis_node,
-    parallel_fetch_node,
     remediation_node,
     route_after_approval,
     route_after_eval,
@@ -49,7 +53,12 @@ def build_graph(*, client: InternalApiClient, max_attempts: int):
     # Node registration: names are referenced by conditional edge routing.
     graph.add_node("entry", entry_node)
     graph.add_node("classify", classify_node)
-    graph.add_node("parallel_fetch", _bind_client(parallel_fetch_node, client))
+    # True fan-out fetch nodes (parallelism handled by LangGraph scheduler).
+    graph.add_node("fetch_registration", _bind_client(fetch_registration_node, client))
+    graph.add_node("fetch_policy", _bind_client(fetch_policy_node, client))
+    graph.add_node("fetch_approvals", _bind_client(fetch_approvals_node, client))
+    graph.add_node("fetch_eval_status", _bind_client(fetch_eval_status_node, client))
+    graph.add_node("fetch_artifacts_status", _bind_client(fetch_artifacts_status_node, client))
     graph.add_node("gap_analysis", gap_analysis_node)
     graph.add_node("artifact_generation", artifact_generation_node)
     graph.add_node("eval_check", _bind_client(eval_check_node, client))
@@ -61,8 +70,19 @@ def build_graph(*, client: InternalApiClient, max_attempts: int):
     graph.set_entry_point("entry")
 
     graph.add_edge("entry", "classify")
-    graph.add_edge("classify", "parallel_fetch")
-    graph.add_edge("parallel_fetch", "gap_analysis")
+    # Fan-out from classify into fetch nodes.
+    graph.add_edge("classify", "fetch_registration")
+    graph.add_edge("classify", "fetch_policy")
+    graph.add_edge("classify", "fetch_approvals")
+    graph.add_edge("classify", "fetch_eval_status")
+    graph.add_edge("classify", "fetch_artifacts_status")
+
+    # Fan-in barrier: gap_analysis waits for all predecessors to complete.
+    graph.add_edge("fetch_registration", "gap_analysis")
+    graph.add_edge("fetch_policy", "gap_analysis")
+    graph.add_edge("fetch_approvals", "gap_analysis")
+    graph.add_edge("fetch_eval_status", "gap_analysis")
+    graph.add_edge("fetch_artifacts_status", "gap_analysis")
 
     graph.add_conditional_edges(
         "gap_analysis",
@@ -116,11 +136,10 @@ def _bind_max_attempts(
 
 async def _finish_node(state: UseCaseState) -> UseCaseState:
     # Finish node marks success in state; service layer persists final snapshots.
-    audit = list(state.get("audit_log", []))
-    audit.append({"event": "FINISH", "details": {"status": "APPROVAL_READY"}})
-    state["audit_log"] = audit
-    state["escalation_required"] = False
-    return state
+    return {
+        "audit_log": [{"event": "FINISH", "details": {"status": "APPROVAL_READY"}}],
+        "escalation_required": False,
+    }
 
 
 # --- Module Notes -----------------------------------------------------------
